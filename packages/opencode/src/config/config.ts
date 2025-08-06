@@ -244,6 +244,7 @@ export namespace Config {
         .optional()
         .describe("@deprecated Use 'share' field instead. Share newly created sessions automatically"),
       autoupdate: z.boolean().optional().describe("Automatically update to the latest version"),
+      include_co_authored_by: z.boolean().optional().describe("Include co-authored-by text in commit messages"),
       disabled_providers: z.array(z.string()).optional().describe("Disable providers that are loaded automatically"),
       model: z.string().describe("Model to use in the format of provider/model, eg anthropic/claude-2").optional(),
       small_model: z

@@ -18,6 +18,22 @@ const MAX_TIMEOUT = 10 * 60 * 1000
 
 const log = Log.create({ service: "bash-tool" })
 
+function replaceCoAuthoredMessage(description: string, includeCoAuthoredBy?: boolean) {
+  if (includeCoAuthoredBy === false) {
+    return description.replace("${commitCoAuthored1}", ".")
+      .replace("${commitCoAuthored2}", "")
+      .replace("${prCoAuthored}", "")
+  }
+
+  const generatedWith = "🤖 Generated with [opencode](https://opencode.ai)"
+  const coAuthoredBy = `${generatedWith}\nCo-Authored-By: opencode <noreply@opencode.ai>`
+
+  // Add co-authoring text when option is true
+  return description.replace("${commitCoAuthored1}", ` ending with:\n   ${coAuthoredBy}`)
+    .replace("${commitCoAuthored2}", `\n\n   ${coAuthoredBy}`)
+    .replace("${prCoAuthored}", `\n\n${generatedWith}`)
+}
+
 const parser = lazy(async () => {
   const { default: Parser } = await import("tree-sitter")
   const Bash = await import("tree-sitter-bash")
@@ -26,18 +42,20 @@ const parser = lazy(async () => {
   return p
 })
 
-export const BashTool = Tool.define("bash", {
-  description: DESCRIPTION,
-  parameters: z.object({
-    command: z.string().describe("The command to execute"),
-    timeout: z.number().describe("Optional timeout in milliseconds").optional(),
-    description: z
-      .string()
-      .describe(
-        "Clear, concise description of what this command does in 5-10 words. Examples:\nInput: ls\nOutput: Lists files in current directory\n\nInput: git status\nOutput: Shows working tree status\n\nInput: npm install\nOutput: Installs package dependencies\n\nInput: mkdir foo\nOutput: Creates directory 'foo'",
-      ),
-  }),
-  async execute(params, ctx) {
+export const BashTool = Tool.define("bash", async () => {
+  const cfg = await Config.get()
+  return {
+    description: replaceCoAuthoredMessage(DESCRIPTION, cfg.include_co_authored_by),
+    parameters: z.object({
+      command: z.string().describe("The command to execute"),
+      timeout: z.number().describe("Optional timeout in milliseconds").optional(),
+      description: z
+        .string()
+        .describe(
+          "Clear, concise description of what this command does in 5-10 words. Examples:\nInput: ls\nOutput: Lists files in current directory\n\nInput: git status\nOutput: Shows working tree status\n\nInput: npm install\nOutput: Installs package dependencies\n\nInput: mkdir foo\nOutput: Creates directory 'foo'",
+        ),
+    }),
+    async execute(params, ctx) {
     const timeout = Math.min(params.timeout ?? DEFAULT_TIMEOUT, MAX_TIMEOUT)
     const app = App.info()
     const cfg = await Config.get()
@@ -152,5 +170,6 @@ export const BashTool = Tool.define("bash", {
       },
       output: [`<stdout>`, stdout ?? "", `</stdout>`, `<stderr>`, stderr ?? "", `</stderr>`].join("\n"),
     }
-  },
+    },
+  }
 })
