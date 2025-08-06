@@ -69,6 +69,6 @@ jobs:
         run: |
           OPENCODE_VERSION=${{ inputs.version }} ./script/publish.ts
         env:
-          GITHUB_TOKEN: ${{ secrets.SST_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           AUR_KEY: ${{ secrets.AUR_KEY }}
           NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
