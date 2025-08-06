@@ -18,6 +18,58 @@
 
 ---
 
+## 🚨 Fork Notice
+
+This is a fork of [sst/opencode](https://github.com/sst/opencode) with the following enhancement:
+
+### **✨ New Feature: Configurable Co-Authored Text**
+
+**Feature:** Add `include_co_authored_by` configuration option to control whether opencode adds co-authored text to git commit messages and PR descriptions.
+
+**Implementation:** 
+- **Files Modified:** `packages/opencode/src/config/config.ts`, `packages/opencode/src/tool/bash.ts`, `packages/opencode/src/tool/bash.txt`
+- **Status:** Ready for upstream contribution
+
+### **How to Enable/Disable Co-Authored Text**
+
+#### **Disable Co-Authored Text (New Option)**
+```bash
+# Global configuration
+mkdir -p ~/.config/opencode
+cat > ~/.config/opencode/opencode.json << 'EOF'
+{
+  "$schema": "https://opencode.ai/config.json",
+  "include_co_authored_by": false
+}
+EOF
+
+# OR Project-level configuration  
+cat > opencode.json << 'EOF'
+{
+  "$schema": "https://opencode.ai/config.json",
+  "include_co_authored_by": false
+}
+EOF
+```
+
+#### **Behavior Changes**
+
+**With `include_co_authored_by: true` (default):**
+```bash
+git commit -m "Your commit message
+
+🤖 Generated with [opencode](https://opencode.ai)
+
+Co-Authored-By: opencode <noreply@opencode.ai>"
+```
+
+**With `include_co_authored_by: false`:**
+```bash
+git commit -m "Your commit message."
+```
+
+---
+
 ### Installation
 
 ```bash
