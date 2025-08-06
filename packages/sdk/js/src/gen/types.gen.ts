@@ -550,6 +550,10 @@ export type Config = {
    */
   autoupdate?: boolean
   /**
+   * Include co-authored-by text in commit messages
+   */
+  include_co_authored_by?: boolean
+  /**
    * Disable providers that are loaded automatically
    */
   disabled_providers?: Array<string>
