@@ -52,7 +52,8 @@ for (const [os, arch] of targets) {
       2,
     ),
   )
-  if (!dry) await $`cd dist/${name} && chmod 777 -R . && bun publish --access public --tag ${npmTag}`
+  // Skip npm publishing for fork - requires NPM_CONFIG_TOKEN
+  // if (!dry) await $`cd dist/${name} && chmod 777 -R . && bun publish --access public --tag ${npmTag}`
   optionalDependencies[name] = version
 }
 
@@ -76,7 +77,8 @@ await Bun.file(`./dist/${pkg.name}/package.json`).write(
     2,
   ),
 )
-if (!dry) await $`cd ./dist/${pkg.name} && bun publish --access public --tag ${npmTag}`
+// Skip npm publishing for fork - requires NPM_CONFIG_TOKEN
+// if (!dry) await $`cd ./dist/${pkg.name} && bun publish --access public --tag ${npmTag}`
 
 if (!snapshot) {
   // Github Release
@@ -123,6 +125,8 @@ if (!snapshot) {
   const macX64Sha = await $`sha256sum ./dist/opencode-darwin-x64.zip | cut -d' ' -f1`.text().then((x) => x.trim())
   const macArm64Sha = await $`sha256sum ./dist/opencode-darwin-arm64.zip | cut -d' ' -f1`.text().then((x) => x.trim())
 
+  // Skip AUR publishing for fork - requires SSH keys
+  /*
   // AUR package
   const pkgbuild = [
     "# Maintainer: dax",
@@ -162,7 +166,10 @@ if (!snapshot) {
     await $`cd ./dist/aur-${pkg} && git commit -m "Update to v${version}"`
     if (!dry) await $`cd ./dist/aur-${pkg} && git push`
   }
+  */
 
+  // Skip Homebrew publishing for fork - requires push access to sst/homebrew-tap
+  /*
   // Homebrew formula
   const homebrewFormula = [
     "# typed: false",
@@ -220,4 +227,5 @@ if (!snapshot) {
   await $`cd ./dist/homebrew-tap && git add opencode.rb`
   await $`cd ./dist/homebrew-tap && git commit -m "Update to v${version}"`
   if (!dry) await $`cd ./dist/homebrew-tap && git push`
+  */
 }

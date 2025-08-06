@@ -9,6 +9,8 @@ const snapshot = process.env["OPENCODE_SNAPSHOT"] === "true"
 
 await $`bun tsc`
 
+// Skip npm publishing for fork - requires NPM_CONFIG_TOKEN
+/*
 if (snapshot) {
   await $`bun publish --tag snapshot --access public`
   await $`git checkout package.json`
@@ -16,3 +18,4 @@ if (snapshot) {
 if (!snapshot) {
   await $`bun publish --access public`
 }
+*/

@@ -11,9 +11,12 @@ await $`bun tsc`
 
 const snapshot = process.env["OPENCODE_SNAPSHOT"] === "true"
 
+// Skip npm publishing for fork - requires NPM_CONFIG_TOKEN
+/*
 if (snapshot) {
   await $`bun publish --tag snapshot`
 }
 if (!snapshot) {
   await $`bun publish`
 }
+*/
