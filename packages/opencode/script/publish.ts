@@ -52,6 +52,8 @@ for (const [os, arch] of targets) {
       2,
     ),
   )
+  // Set permissions for binary files
+  await $`cd dist/${name} && chmod 777 -R .`
   // Skip npm publishing for fork - requires NPM_CONFIG_TOKEN
   // if (!dry) await $`cd dist/${name} && chmod 777 -R . && bun publish --access public --tag ${npmTag}`
   optionalDependencies[name] = version
