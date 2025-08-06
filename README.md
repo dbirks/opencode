@@ -26,9 +26,9 @@ This is a fork of [sst/opencode](https://github.com/sst/opencode) with the follo
 
 **Feature:** Add `include_co_authored_by` configuration option to control whether opencode adds co-authored text to git commit messages and PR descriptions.
 
-**Implementation:** 
-- **Files Modified:** `packages/opencode/src/config/config.ts`, `packages/opencode/src/tool/bash.ts`, `packages/opencode/src/tool/bash.txt`
-- **Status:** Ready for upstream contribution
+**Based on:** [sst/opencode PR #1369](https://github.com/sst/opencode/pull/1369) - "implement the includeCoAuthoredBy option"
+
+**Status:** Ready for upstream contribution
 
 ### **How to Enable/Disable Co-Authored Text**
 
