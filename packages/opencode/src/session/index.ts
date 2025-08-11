@@ -11,7 +11,6 @@ import {
   type LanguageModelUsage,
   type ProviderMetadata,
   type ModelMessage,
-  stepCountIs,
   type StreamTextResult,
 } from "ai"
 
@@ -36,12 +35,13 @@ import { NamedError } from "../util/error"
 import { SystemPrompt } from "./system"
 import { FileTime } from "../file/time"
 import { MessageV2 } from "./message-v2"
-import { Mode } from "./mode"
 import { LSP } from "../lsp"
 import { ReadTool } from "../tool/read"
 import { mergeDeep, pipe, splitWhen } from "remeda"
 import { ToolRegistry } from "../tool/registry"
 import { Plugin } from "../plugin"
+import { Agent } from "../agent/agent"
+import { Permission } from "../permission"
 
 export namespace Session {
   const log = Log.create({ service: "session" })
@@ -357,7 +357,7 @@ export namespace Session {
     messageID: Identifier.schema("message").optional(),
     providerID: z.string(),
     modelID: z.string(),
-    mode: z.string().optional(),
+    agent: z.string().optional(),
     system: z.string().optional(),
     tools: z.record(z.boolean()).optional(),
     parts: z.array(
@@ -382,6 +382,16 @@ export namespace Session {
           .openapi({
             ref: "FilePartInput",
           }),
+        MessageV2.AgentPart.omit({
+          messageID: true,
+          sessionID: true,
+        })
+          .partial({
+            id: true,
+          })
+          .openapi({
+            ref: "AgentPartInput",
+          }),
       ]),
     ),
   })
@@ -393,7 +403,7 @@ export namespace Session {
     const l = log.clone().tag("session", input.sessionID)
     l.info("chatting")
 
-    const inputMode = input.mode ?? "build"
+    const inputAgent = input.agent ?? "build"
 
     // Process revert cleanup first, before creating new messages
     const session = await get(input.sessionID)
@@ -566,6 +576,28 @@ export namespace Session {
               ]
           }
         }
+
+        if (part.type === "agent") {
+          return [
+            {
+              id: Identifier.ascending("part"),
+              ...part,
+              messageID: userMsg.id,
+              sessionID: input.sessionID,
+            },
+            {
+              id: Identifier.ascending("part"),
+              messageID: userMsg.id,
+              sessionID: input.sessionID,
+              type: "text",
+              synthetic: true,
+              text:
+                "Use the above message and context to generate a prompt and call the task tool with subagent: " +
+                part.name,
+            },
+          ]
+        }
+
         return [
           {
             id: Identifier.ascending("part"),
@@ -576,15 +608,6 @@ export namespace Session {
         ]
       }),
     ).then((x) => x.flat())
-    if (inputMode === "plan")
-      userParts.push({
-        id: Identifier.ascending("part"),
-        messageID: userMsg.id,
-        sessionID: input.sessionID,
-        type: "text",
-        text: PROMPT_PLAN,
-        synthetic: true,
-      })
     await Plugin.trigger(
       "chat.message",
       {},
@@ -647,7 +670,10 @@ export namespace Session {
       generateText({
         maxOutputTokens: small.info.reasoning ? 1024 : 20,
         providerOptions: {
-          [input.providerID]: small.info.options,
+          [input.providerID]: {
+            ...small.info.options,
+            ...ProviderTransform.options(input.providerID, small.info.id),
+          },
         },
         messages: [
           ...SystemPrompt.title(input.providerID).map(
@@ -683,12 +709,22 @@ export namespace Session {
         .catch(() => {})
     }
 
-    const mode = await Mode.get(inputMode)
+    const agent = await Agent.get(inputAgent)
+    if (agent.name === "plan") {
+      msgs.at(-1)?.parts.push({
+        id: Identifier.ascending("part"),
+        messageID: userMsg.id,
+        sessionID: input.sessionID,
+        type: "text",
+        text: PROMPT_PLAN,
+        synthetic: true,
+      })
+    }
     let system = SystemPrompt.header(input.providerID)
     system.push(
       ...(() => {
         if (input.system) return [input.system]
-        if (mode.prompt) return [mode.prompt]
+        if (agent.prompt) return [agent.prompt]
         return SystemPrompt.provider(input.modelID)
       })(),
     )
@@ -702,7 +738,7 @@ export namespace Session {
       id: Identifier.ascending("message"),
       role: "assistant",
       system,
-      mode: inputMode,
+      mode: inputAgent,
       path: {
         cwd: app.path.cwd,
         root: app.path.root,
@@ -727,7 +763,7 @@ export namespace Session {
     const processor = createProcessor(assistantMsg, model.info)
 
     const enabledTools = pipe(
-      mode.tools,
+      agent.tools,
       mergeDeep(await ToolRegistry.enabled(input.providerID, input.modelID)),
       mergeDeep(input.tools ?? {}),
     )
@@ -816,20 +852,24 @@ export namespace Session {
       tools[key] = item
     }
 
-    const params = {
-      temperature: model.info.temperature
-        ? (mode.temperature ?? ProviderTransform.temperature(input.providerID, input.modelID))
-        : undefined,
-      topP: mode.topP ?? ProviderTransform.topP(input.providerID, input.modelID),
-    }
-    await Plugin.trigger(
+    const params = await Plugin.trigger(
       "chat.params",
       {
         model: model.info,
         provider: await Provider.getProvider(input.providerID),
         message: userMsg,
       },
-      params,
+      {
+        temperature: model.info.temperature
+          ? (agent.temperature ?? ProviderTransform.temperature(input.providerID, input.modelID))
+          : undefined,
+        topP: agent.topP ?? ProviderTransform.topP(input.providerID, input.modelID),
+        options: {
+          ...ProviderTransform.options(input.providerID, input.modelID),
+          ...model.info.options,
+          ...agent.options,
+        },
+      },
     )
     const stream = streamText({
       onError(e) {
@@ -871,7 +911,7 @@ export namespace Session {
             },
             modelID: input.modelID,
             providerID: input.providerID,
-            mode: inputMode,
+            mode: inputAgent,
             time: {
               created: Date.now(),
             },
@@ -897,9 +937,20 @@ export namespace Session {
       activeTools: Object.keys(tools).filter((x) => x !== "invalid"),
       maxOutputTokens: outputLimit,
       abortSignal: abort.signal,
-      stopWhen: stepCountIs(1000),
+      stopWhen: async ({ steps }) => {
+        if (steps.length >= 1000) {
+          return true
+        }
+
+        // Check if processor flagged that we should stop
+        if (processor.getShouldStop()) {
+          return true
+        }
+
+        return false
+      },
       providerOptions: {
-        [input.providerID]: model.info.options,
+        [input.providerID]: params.options,
       },
       temperature: params.temperature,
       topP: params.topP,
@@ -945,13 +996,18 @@ export namespace Session {
   function createProcessor(assistantMsg: MessageV2.Assistant, model: ModelsDev.Model) {
     const toolcalls: Record<string, MessageV2.ToolPart> = {}
     let snapshot: string | undefined
+    let shouldStop = false
     return {
       partFromToolCall(toolCallID: string) {
         return toolcalls[toolCallID]
       },
+      getShouldStop() {
+        return shouldStop
+      },
       async process(stream: StreamTextResult<Record<string, AITool>, never>) {
         try {
           let currentText: MessageV2.TextPart | undefined
+          // let reasoningMap: Record<string, MessageV2.ReasoningPart> = {}
 
           for await (const value of stream.fullStream) {
             log.info("part", {
@@ -960,6 +1016,46 @@ export namespace Session {
             switch (value.type) {
               case "start":
                 break
+
+              /*
+              case "reasoning-start":
+                if (value.id in reasoningMap) {
+                  continue
+                }
+                reasoningMap[value.id] = {
+                  id: Identifier.ascending("part"),
+                  messageID: assistantMsg.id,
+                  sessionID: assistantMsg.sessionID,
+                  type: "reasoning",
+                  text: "",
+                  time: {
+                    start: Date.now(),
+                  },
+                }
+                break
+
+              case "reasoning-delta":
+                if (value.id in reasoningMap) {
+                  const part = reasoningMap[value.id]
+                  part.text += value.text
+                  if (part.text) await updatePart(part)
+                }
+                break
+
+              case "reasoning-end":
+                if (value.id in reasoningMap) {
+                  const part = reasoningMap[value.id]
+                  part.text = part.text.trimEnd()
+                  part.metadata = value.providerMetadata
+                  part.time = {
+                    ...part.time,
+                    end: Date.now(),
+                  }
+                  await updatePart(part)
+                  delete reasoningMap[value.id]
+                }
+                break
+                */
 
               case "tool-input-start":
                 const part = await updatePart({
@@ -1025,6 +1121,9 @@ export namespace Session {
               case "tool-error": {
                 const match = toolcalls[value.toolCallId]
                 if (match && match.state.status === "running") {
+                  if (value.error instanceof Permission.RejectedError) {
+                    shouldStop = true
+                  }
                   await updatePart({
                     ...match,
                     state: {
@@ -1041,7 +1140,6 @@ export namespace Session {
                 }
                 break
               }
-
               case "error":
                 throw value.error
 

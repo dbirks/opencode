@@ -10,20 +10,25 @@ export namespace Agent {
   export const Info = z
     .object({
       name: z.string(),
+      description: z.string().optional(),
+      mode: z.union([z.literal("subagent"), z.literal("primary"), z.literal("all")]),
+      topP: z.number().optional(),
+      temperature: z.number().optional(),
       model: z
         .object({
           modelID: z.string(),
           providerID: z.string(),
         })
         .optional(),
-      description: z.string(),
       prompt: z.string().optional(),
       tools: z.record(z.boolean()),
+      options: z.record(z.string(), z.any()),
     })
     .openapi({
       ref: "Agent",
     })
   export type Info = z.infer<typeof Info>
+
   const state = App.state("agent", async () => {
     const cfg = await Config.get()
     const result: Record<string, Info> = {
@@ -35,6 +40,24 @@ export namespace Agent {
           todoread: false,
           todowrite: false,
         },
+        options: {},
+        mode: "subagent",
+      },
+      build: {
+        name: "build",
+        tools: {},
+        options: {},
+        mode: "primary",
+      },
+      plan: {
+        name: "plan",
+        options: {},
+        tools: {
+          write: false,
+          edit: false,
+          patch: false,
+        },
+        mode: "primary",
       },
     }
     for (const [key, value] of Object.entries(cfg.agent ?? {})) {
@@ -46,14 +69,16 @@ export namespace Agent {
       if (!item)
         item = result[key] = {
           name: key,
-          description: "",
-          tools: {
-            todowrite: false,
-            todoread: false,
-          },
+          mode: "all",
+          options: {},
+          tools: {},
         }
-      const model = value.model ?? cfg.model
-      if (model) item.model = Provider.parseModel(model)
+      const { model, prompt, tools, description, temperature, top_p, mode, ...extra } = value
+      item.options = {
+        ...item.options,
+        ...extra,
+      }
+      if (value.model) item.model = Provider.parseModel(value.model)
       if (value.prompt) item.prompt = value.prompt
       if (value.tools)
         item.tools = {
@@ -61,6 +86,9 @@ export namespace Agent {
           ...value.tools,
         }
       if (value.description) item.description = value.description
+      if (value.temperature != undefined) item.temperature = value.temperature
+      if (value.top_p != undefined) item.topP = value.top_p
+      if (value.mode) item.mode = value.mode
     }
     return result
   })

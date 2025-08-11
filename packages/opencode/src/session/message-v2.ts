@@ -118,6 +118,19 @@ export namespace MessageV2 {
   })
   export type TextPart = z.infer<typeof TextPart>
 
+  export const ReasoningPart = PartBase.extend({
+    type: z.literal("reasoning"),
+    text: z.string(),
+    metadata: z.record(z.any()).optional(),
+    time: z.object({
+      start: z.number(),
+      end: z.number().optional(),
+    }),
+  }).openapi({
+    ref: "ReasoningPart",
+  })
+  export type ReasoningPart = z.infer<typeof ReasoningPart>
+
   export const ToolPart = PartBase.extend({
     type: z.literal("tool"),
     callID: z.string(),
@@ -172,6 +185,21 @@ export namespace MessageV2 {
   })
   export type FilePart = z.infer<typeof FilePart>
 
+  export const AgentPart = PartBase.extend({
+    type: z.literal("agent"),
+    name: z.string(),
+    source: z
+      .object({
+        value: z.string(),
+        start: z.number().int(),
+        end: z.number().int(),
+      })
+      .optional(),
+  }).openapi({
+    ref: "AgentPart",
+  })
+  export type AgentPart = z.infer<typeof AgentPart>
+
   export const StepStartPart = PartBase.extend({
     type: z.literal("step-start"),
   }).openapi({
@@ -212,7 +240,17 @@ export namespace MessageV2 {
   export type User = z.infer<typeof User>
 
   export const Part = z
-    .discriminatedUnion("type", [TextPart, FilePart, ToolPart, StepStartPart, StepFinishPart, SnapshotPart, PatchPart])
+    .discriminatedUnion("type", [
+      TextPart,
+      ReasoningPart,
+      FilePart,
+      ToolPart,
+      StepStartPart,
+      StepFinishPart,
+      SnapshotPart,
+      PatchPart,
+      AgentPart,
+    ])
     .openapi({
       ref: "Part",
     })

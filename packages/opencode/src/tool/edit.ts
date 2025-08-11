@@ -111,6 +111,7 @@ export const EditTool = Tool.define("edit", {
         continue
       }
       output += `\n<project_diagnostics>\n${file}\n${issues
+        // TODO: may want to make more leniant for eslint
         .filter((item) => item.severity === 1)
         .map(LSP.Diagnostic.pretty)
         .join("\n")}\n</project_diagnostics>\n`
@@ -187,7 +188,10 @@ export const LineTrimmedReplacer: Replacer = function* (content, find) {
 
       let matchEndIndex = matchStartIndex
       for (let k = 0; k < searchLines.length; k++) {
-        matchEndIndex += originalLines[i + k].length + 1
+        matchEndIndex += originalLines[i + k].length
+        if (k < searchLines.length - 1) {
+          matchEndIndex += 1 // Add newline character except for the last line
+        }
       }
 
       yield content.substring(matchStartIndex, matchEndIndex)

@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { exec } from "child_process"
-import { text } from "stream/consumers"
+
 import { Tool } from "./tool"
 import DESCRIPTION from "./bash.txt"
 import { App } from "../app/app"
@@ -148,8 +148,35 @@ export const BashTool = Tool.define("bash", async () => {
       timeout,
     })
 
-    const stdoutPromise = text(process.stdout!)
-    const stderrPromise = text(process.stderr!)
+    let output = ""
+
+    // Initialize metadata with empty output
+    ctx.metadata({
+      metadata: {
+        output: "",
+        description: params.description,
+      },
+    })
+
+    process.stdout?.on("data", (chunk) => {
+      output += chunk.toString()
+      ctx.metadata({
+        metadata: {
+          output: output,
+          description: params.description,
+        },
+      })
+    })
+
+    process.stderr?.on("data", (chunk) => {
+      output += chunk.toString()
+      ctx.metadata({
+        metadata: {
+          output: output,
+          description: params.description,
+        },
+      })
+    })
 
     await new Promise<void>((resolve) => {
       process.on("close", () => {
@@ -157,18 +184,22 @@ export const BashTool = Tool.define("bash", async () => {
       })
     })
 
-    const stdout = await stdoutPromise
-    const stderr = await stderrPromise
+    ctx.metadata({
+      metadata: {
+        output: output,
+        exit: process.exitCode,
+        description: params.description,
+      },
+    })
 
     return {
       title: params.command,
       metadata: {
-        stderr,
-        stdout,
+        output,
         exit: process.exitCode,
         description: params.description,
       },
-      output: [`<stdout>`, stdout ?? "", `</stdout>`, `<stderr>`, stderr ?? "", `</stderr>`].join("\n"),
+      output,
     }
     },
   }

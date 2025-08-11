@@ -187,6 +187,10 @@ func (m *messagesComponent) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Properties.Info.SessionID == m.app.Session.ID {
 			cmds = append(cmds, m.renderView())
 		}
+	case opencode.EventListResponseEventSessionError:
+		if msg.Properties.SessionID == m.app.Session.ID {
+			cmds = append(cmds, m.renderView())
+		}
 	case opencode.EventListResponseEventMessagePartUpdated:
 		if msg.Properties.Part.SessionID == m.app.Session.ID {
 			cmds = append(cmds, m.renderView())
@@ -210,7 +214,18 @@ func (m *messagesComponent) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clipboard = msg.clipboard
 		m.loading = false
 		m.tail = m.viewport.AtBottom()
+
+		// Preserve scroll across reflow
+		// if the user was at bottom, keep following; otherwise restore the previous offset.
+		wasAtBottom := m.viewport.AtBottom()
+		prevYOffset := m.viewport.YOffset
 		m.viewport = msg.viewport
+		if wasAtBottom {
+			m.viewport.GotoBottom()
+		} else {
+			m.viewport.YOffset = prevYOffset
+		}
+
 		m.header = msg.header
 		if m.dirty {
 			cmds = append(cmds, m.renderView())
@@ -218,7 +233,6 @@ func (m *messagesComponent) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	m.tail = m.viewport.AtBottom()
-
 	viewport, cmd := m.viewport.Update(msg)
 	m.viewport = viewport
 	cmds = append(cmds, cmd)
@@ -300,11 +314,16 @@ func (m *messagesComponent) renderView() tea.Cmd {
 						}
 						remainingParts := message.Parts[partIndex+1:]
 						fileParts := make([]opencode.FilePart, 0)
+						agentParts := make([]opencode.AgentPart, 0)
 						for _, part := range remainingParts {
 							switch part := part.(type) {
 							case opencode.FilePart:
 								if part.Source.Text.Start >= 0 && part.Source.Text.End >= part.Source.Text.Start {
 									fileParts = append(fileParts, part)
+								}
+							case opencode.AgentPart:
+								if part.Source.Start >= 0 && part.Source.End >= part.Source.Start {
+									agentParts = append(agentParts, part)
 								}
 							}
 						}
@@ -354,7 +373,9 @@ func (m *messagesComponent) renderView() tea.Cmd {
 								m.showToolDetails,
 								width,
 								files,
+								false,
 								fileParts,
+								agentParts,
 							)
 							content = lipgloss.PlaceHorizontal(
 								m.width,
@@ -379,6 +400,7 @@ func (m *messagesComponent) renderView() tea.Cmd {
 					revertedToolCount = 0
 				}
 				hasTextPart := false
+				hasContent := false
 				for partIndex, p := range message.Parts {
 					switch part := p.(type) {
 					case opencode.TextPart:
@@ -432,7 +454,9 @@ func (m *messagesComponent) renderView() tea.Cmd {
 									m.showToolDetails,
 									width,
 									"",
+									false,
 									[]opencode.FilePart{},
+									[]opencode.AgentPart{},
 									toolCallParts...,
 								)
 								content = lipgloss.PlaceHorizontal(
@@ -452,7 +476,9 @@ func (m *messagesComponent) renderView() tea.Cmd {
 								m.showToolDetails,
 								width,
 								"",
+								false,
 								[]opencode.FilePart{},
+								[]opencode.AgentPart{},
 								toolCallParts...,
 							)
 							content = lipgloss.PlaceHorizontal(
@@ -466,6 +492,7 @@ func (m *messagesComponent) renderView() tea.Cmd {
 							partCount++
 							lineCount += lipgloss.Height(content) + 1
 							blocks = append(blocks, content)
+							hasContent = true
 						}
 					case opencode.ToolPart:
 						if reverted {
@@ -527,8 +554,63 @@ func (m *messagesComponent) renderView() tea.Cmd {
 							partCount++
 							lineCount += lipgloss.Height(content) + 1
 							blocks = append(blocks, content)
+							hasContent = true
 						}
+					case opencode.ReasoningPart:
+						if reverted {
+							continue
+						}
+						text := "..."
+						if part.Text != "" {
+							text = part.Text
+						}
+						content = renderText(
+							m.app,
+							message.Info,
+							text,
+							casted.ModelID,
+							m.showToolDetails,
+							width,
+							"",
+							true,
+							[]opencode.FilePart{},
+							[]opencode.AgentPart{},
+						)
+						content = lipgloss.PlaceHorizontal(
+							m.width,
+							lipgloss.Center,
+							content,
+							styles.WhitespaceStyle(t.Background()),
+						)
+						partCount++
+						lineCount += lipgloss.Height(content) + 1
+						blocks = append(blocks, content)
+						hasContent = true
 					}
+				}
+
+				if !hasContent {
+					content = renderText(
+						m.app,
+						message.Info,
+						"Generating...",
+						casted.ModelID,
+						m.showToolDetails,
+						width,
+						"",
+						false,
+						[]opencode.FilePart{},
+						[]opencode.AgentPart{},
+					)
+					content = lipgloss.PlaceHorizontal(
+						m.width,
+						lipgloss.Center,
+						content,
+						styles.WhitespaceStyle(t.Background()),
+					)
+					partCount++
+					lineCount += lipgloss.Height(content) + 1
+					blocks = append(blocks, content)
 				}
 			}
 

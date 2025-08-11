@@ -64,12 +64,13 @@ func (r CommandRegistry) Sorted() []Command {
 		commands = append(commands, command)
 	}
 	slices.SortFunc(commands, func(a, b Command) int {
-		// Priority order: session_new, session_share, model_list, app_help first, app_exit last
+		// Priority order: session_new, session_share, model_list, agent_list, app_help first, app_exit last
 		priorityOrder := map[CommandName]int{
 			SessionNewCommand:   0,
 			AppHelpCommand:      1,
 			SessionShareCommand: 2,
 			ModelListCommand:    3,
+			AgentListCommand:    4,
 		}
 
 		aPriority, aHasPriority := priorityOrder[a.Name]
@@ -107,8 +108,8 @@ func (r CommandRegistry) Matches(msg tea.KeyPressMsg, leader bool) []Command {
 
 const (
 	AppHelpCommand              CommandName = "app_help"
-	SwitchModeCommand           CommandName = "switch_mode"
-	SwitchModeReverseCommand    CommandName = "switch_mode_reverse"
+	SwitchAgentCommand          CommandName = "switch_agent"
+	SwitchAgentReverseCommand   CommandName = "switch_agent_reverse"
 	EditorOpenCommand           CommandName = "editor_open"
 	SessionNewCommand           CommandName = "session_new"
 	SessionListCommand          CommandName = "session_list"
@@ -119,6 +120,8 @@ const (
 	SessionExportCommand        CommandName = "session_export"
 	ToolDetailsCommand          CommandName = "tool_details"
 	ModelListCommand            CommandName = "model_list"
+	AgentListCommand            CommandName = "agent_list"
+	ModelCycleRecentCommand     CommandName = "model_cycle_recent"
 	ThemeListCommand            CommandName = "theme_list"
 	FileListCommand             CommandName = "file_list"
 	FileCloseCommand            CommandName = "file_close"
@@ -181,13 +184,13 @@ func LoadFromConfig(config *opencode.Config) CommandRegistry {
 			Trigger:     []string{"help"},
 		},
 		{
-			Name:        SwitchModeCommand,
-			Description: "next mode",
+			Name:        SwitchAgentCommand,
+			Description: "next agent",
 			Keybindings: parseBindings("tab"),
 		},
 		{
-			Name:        SwitchModeReverseCommand,
-			Description: "previous mode",
+			Name:        SwitchAgentReverseCommand,
+			Description: "previous agent",
 			Keybindings: parseBindings("shift+tab"),
 		},
 		{
@@ -247,6 +250,17 @@ func LoadFromConfig(config *opencode.Config) CommandRegistry {
 			Description: "list models",
 			Keybindings: parseBindings("<leader>m"),
 			Trigger:     []string{"models"},
+		},
+		{
+			Name:        AgentListCommand,
+			Description: "list agents",
+			Keybindings: parseBindings("<leader>a"),
+			Trigger:     []string{"agents"},
+		},
+		{
+			Name:        ModelCycleRecentCommand,
+			Description: "cycle recent models",
+			Keybindings: parseBindings("f2"),
 		},
 		{
 			Name:        ThemeListCommand,

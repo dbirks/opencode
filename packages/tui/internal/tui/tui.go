@@ -69,6 +69,7 @@ type Model struct {
 	commandProvider      completions.CompletionProvider
 	fileProvider         completions.CompletionProvider
 	symbolsProvider      completions.CompletionProvider
+	agentsProvider       completions.CompletionProvider
 	showCompletionDialog bool
 	leaderBinding        *key.Binding
 	toastManager         *toast.ToastManager
@@ -211,8 +212,8 @@ func (a Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.editor = updated.(chat.EditorComponent)
 			cmds = append(cmds, cmd)
 
-			// Set both file and symbols providers for @ completion
-			a.completions = dialog.NewCompletionDialogComponent("@", a.fileProvider, a.symbolsProvider)
+			// Set file, symbols, and agents providers for @ completion
+			a.completions = dialog.NewCompletionDialogComponent("@", a.agentsProvider, a.fileProvider, a.symbolsProvider)
 			updated, cmd = a.completions.Update(msg)
 			a.completions = updated.(dialog.CompletionDialog)
 			cmds = append(cmds, cmd)
@@ -381,6 +382,9 @@ func (a Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.app.Messages = []app.Message{}
 	case dialog.CompletionDialogCloseMsg:
 		a.showCompletionDialog = false
+	case chat.AttachmentInsertedMsg:
+		// Close completion dialog when the editor inserts an attachment
+		a.showCompletionDialog = false
 	case opencode.EventListResponseEventInstallationUpdated:
 		return a, toast.NewSuccessToast(
 			"opencode updated to "+msg.Properties.Version+", restart to apply.",
@@ -419,6 +423,8 @@ func (a Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					switch casted := p.(type) {
 					case opencode.TextPart:
 						return casted.ID == msg.Properties.Part.ID
+					case opencode.ReasoningPart:
+						return casted.ID == msg.Properties.Part.ID
 					case opencode.FilePart:
 						return casted.ID == msg.Properties.Part.ID
 					case opencode.ToolPart:
@@ -456,6 +462,8 @@ func (a Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				partIndex := slices.IndexFunc(message.Parts, func(p opencode.PartUnion) bool {
 					switch casted := p.(type) {
 					case opencode.TextPart:
+						return casted.ID == msg.Properties.PartID
+					case opencode.ReasoningPart:
 						return casted.ID == msg.Properties.PartID
 					case opencode.FilePart:
 						return casted.ID == msg.Properties.PartID
@@ -585,11 +593,37 @@ func (a Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case app.ModelSelectedMsg:
 		a.app.Provider = &msg.Provider
 		a.app.Model = &msg.Model
-		a.app.State.ModeModel[a.app.Mode.Name] = app.ModeModel{
+		a.app.State.AgentModel[a.app.Agent().Name] = app.AgentModel{
 			ProviderID: msg.Provider.ID,
 			ModelID:    msg.Model.ID,
 		}
 		a.app.State.UpdateModelUsage(msg.Provider.ID, msg.Model.ID)
+		cmds = append(cmds, a.app.SaveState())
+	case app.AgentSelectedMsg:
+		// Find the agent index
+		for i, agent := range a.app.Agents {
+			if agent.Name == msg.Agent.Name {
+				a.app.AgentIndex = i
+				break
+			}
+		}
+		a.app.State.Agent = msg.Agent.Name
+
+		// Switch to the agent's preferred model if available
+		if model, ok := a.app.State.AgentModel[msg.Agent.Name]; ok {
+			for _, provider := range a.app.Providers {
+				if provider.ID == model.ProviderID {
+					a.app.Provider = &provider
+					for _, m := range provider.Models {
+						if m.ID == model.ModelID {
+							a.app.Model = &m
+							break
+						}
+					}
+					break
+				}
+			}
+		}
 		cmds = append(cmds, a.app.SaveState())
 	case dialog.ThemeSelectedMsg:
 		a.app.State.Theme = msg.ThemeName
@@ -612,6 +646,17 @@ func (a Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.editor.SetExitKeyInDebounce(false)
 	case dialog.FindSelectedMsg:
 		return a.openFile(msg.FilePath)
+	case tea.PasteMsg, tea.ClipboardMsg:
+		// Paste events: prioritize modal if active, otherwise editor
+		if a.modal != nil {
+			updatedModal, cmd := a.modal.Update(msg)
+			a.modal = updatedModal.(layout.Modal)
+			return a, cmd
+		} else {
+			updatedEditor, cmd := a.editor.Update(msg)
+			a.editor = updatedEditor.(chat.EditorComponent)
+			return a, cmd
+		}
 
 	// API
 	case api.Request:
@@ -679,17 +724,17 @@ func (a Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmds = append(cmds, cmd)
 	a.status = s.(status.StatusComponent)
 
-	u, cmd := a.editor.Update(msg)
-	a.editor = u.(chat.EditorComponent)
+	updatedEditor, cmd := a.editor.Update(msg)
+	a.editor = updatedEditor.(chat.EditorComponent)
 	cmds = append(cmds, cmd)
 
-	u, cmd = a.messages.Update(msg)
-	a.messages = u.(chat.MessagesComponent)
+	updatedMessages, cmd := a.messages.Update(msg)
+	a.messages = updatedMessages.(chat.MessagesComponent)
 	cmds = append(cmds, cmd)
 
 	if a.modal != nil {
-		u, cmd := a.modal.Update(msg)
-		a.modal = u.(layout.Modal)
+		updatedModal, cmd := a.modal.Update(msg)
+		a.modal = updatedModal.(layout.Modal)
 		cmds = append(cmds, cmd)
 	}
 
@@ -940,12 +985,12 @@ func (a Model) executeCommand(command commands.Command) (tea.Model, tea.Cmd) {
 	case commands.AppHelpCommand:
 		helpDialog := dialog.NewHelpDialog(a.app)
 		a.modal = helpDialog
-	case commands.SwitchModeCommand:
-		updated, cmd := a.app.SwitchMode()
+	case commands.SwitchAgentCommand:
+		updated, cmd := a.app.SwitchAgent()
 		a.app = updated
 		cmds = append(cmds, cmd)
-	case commands.SwitchModeReverseCommand:
-		updated, cmd := a.app.SwitchModeReverse()
+	case commands.SwitchAgentReverseCommand:
+		updated, cmd := a.app.SwitchAgentReverse()
 		a.app = updated
 		cmds = append(cmds, cmd)
 	case commands.EditorOpenCommand:
@@ -1100,6 +1145,14 @@ func (a Model) executeCommand(command commands.Command) (tea.Model, tea.Cmd) {
 	case commands.ModelListCommand:
 		modelDialog := dialog.NewModelDialog(a.app)
 		a.modal = modelDialog
+	case commands.AgentListCommand:
+		agentDialog := dialog.NewAgentDialog(a.app)
+		a.modal = agentDialog
+	case commands.ModelCycleRecentCommand:
+		slog.Debug("ModelCycleRecentCommand triggered")
+		updated, cmd := a.app.CycleRecentModel()
+		a.app = updated
+		cmds = append(cmds, cmd)
 	case commands.ThemeListCommand:
 		themeDialog := dialog.NewThemeDialog()
 		a.modal = themeDialog
@@ -1209,6 +1262,7 @@ func NewModel(app *app.App) tea.Model {
 	commandProvider := completions.NewCommandCompletionProvider(app)
 	fileProvider := completions.NewFileContextGroup(app)
 	symbolsProvider := completions.NewSymbolsContextGroup(app)
+	agentsProvider := completions.NewAgentsContextGroup(app)
 
 	messages := chat.NewMessagesComponent(app)
 	editor := chat.NewEditorComponent(app)
@@ -1229,6 +1283,7 @@ func NewModel(app *app.App) tea.Model {
 		commandProvider:      commandProvider,
 		fileProvider:         fileProvider,
 		symbolsProvider:      symbolsProvider,
+		agentsProvider:       agentsProvider,
 		leaderBinding:        leaderBinding,
 		showCompletionDialog: false,
 		toastManager:         toast.NewToastManager(),

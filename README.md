@@ -78,7 +78,7 @@ curl -fsSL https://opencode.ai/install | bash
 
 # Package managers
 npm i -g opencode-ai@latest        # or bun/pnpm/yarn
-brew install sst/tap/opencode      # macOS
+brew install sst/tap/opencode      # macOS and Linux
 paru -S opencode-bin               # Arch Linux
 ```
 
@@ -135,7 +135,7 @@ And run.
 
 ```bash
 $ bun install
-$ bun run packages/opencode/src/index.ts
+$ bun dev
 ```
 
 #### Development Notes

@@ -208,7 +208,9 @@ func renderText(
 	showToolDetails bool,
 	width int,
 	extra string,
+	isThinking bool,
 	fileParts []opencode.FilePart,
+	agentParts []opencode.AgentPart,
 	toolCalls ...opencode.ToolPart,
 ) string {
 	t := theme.CurrentTheme()
@@ -218,8 +220,18 @@ func renderText(
 	var content string
 	switch casted := message.(type) {
 	case opencode.AssistantMessage:
+		bg := t.Background()
+		if isThinking {
+			bg = t.BackgroundPanel()
+		}
 		ts = time.UnixMilli(int64(casted.Time.Created))
-		content = util.ToMarkdown(text, width+2, t.Background())
+		if casted.Time.Completed > 0 {
+			ts = time.UnixMilli(int64(casted.Time.Completed))
+		}
+		content = util.ToMarkdown(text, width, bg)
+		if isThinking {
+			content = styles.NewStyle().Background(bg).Foreground(t.TextMuted()).Render("Thinking") + "\n\n" + content
+		}
 	case opencode.UserMessage:
 		ts = time.UnixMilli(int64(casted.Time.Created))
 		base := styles.NewStyle().Foreground(t.Text()).Background(backgroundColor)
@@ -229,9 +241,66 @@ func renderText(
 
 		// Apply highlighting to filenames and base style to rest of text BEFORE wrapping
 		textLen := int64(len(text))
+
+		// Collect all parts to highlight (both file and agent parts)
+		type highlightPart struct {
+			start int64
+			end   int64
+			color compat.AdaptiveColor
+		}
+		var highlights []highlightPart
+
+		// Add file parts with secondary color
 		for _, filePart := range fileParts {
-			highlight := base.Foreground(t.Secondary())
-			start, end := filePart.Source.Text.Start, filePart.Source.Text.End
+			highlights = append(highlights, highlightPart{
+				start: filePart.Source.Text.Start,
+				end:   filePart.Source.Text.End,
+				color: t.Secondary(),
+			})
+		}
+
+		// Add agent parts with secondary color (same as file parts)
+		for _, agentPart := range agentParts {
+			highlights = append(highlights, highlightPart{
+				start: agentPart.Source.Start,
+				end:   agentPart.Source.End,
+				color: t.Secondary(),
+			})
+		}
+
+		// Sort highlights by start position
+		slices.SortFunc(highlights, func(a, b highlightPart) int {
+			if a.start < b.start {
+				return -1
+			}
+			if a.start > b.start {
+				return 1
+			}
+			return 0
+		})
+
+		// Merge overlapping highlights to prevent duplication
+		merged := make([]highlightPart, 0)
+		for _, part := range highlights {
+			if len(merged) == 0 {
+				merged = append(merged, part)
+				continue
+			}
+
+			last := &merged[len(merged)-1]
+			// If current part overlaps with the last one, merge them
+			if part.start <= last.end {
+				if part.end > last.end {
+					last.end = part.end
+				}
+			} else {
+				merged = append(merged, part)
+			}
+		}
+
+		for _, part := range merged {
+			highlight := base.Foreground(part.color)
+			start, end := part.start, part.end
 
 			if end > textLen {
 				end = textLen
@@ -266,9 +335,35 @@ func renderText(
 	if time.Now().Format("02 Jan 2006") == timestamp[:11] {
 		timestamp = timestamp[12:]
 	}
-	info := fmt.Sprintf("%s (%s)", author, timestamp)
-	info = styles.NewStyle().Foreground(t.TextMuted()).Render(info)
 
+	// Check if this is an assistant message with agent information
+	var modelAndAgentSuffix string
+	if assistantMsg, ok := message.(opencode.AssistantMessage); ok && assistantMsg.Mode != "" {
+		// Find the agent index by name to get the correct color
+		var agentIndex int
+		for i, agent := range app.Agents {
+			if agent.Name == assistantMsg.Mode {
+				agentIndex = i
+				break
+			}
+		}
+
+		// Get agent color based on the original agent index (same as status bar)
+		agentColor := util.GetAgentColor(agentIndex)
+
+		// Style the agent name with the same color as status bar
+		agentName := cases.Title(language.Und).String(assistantMsg.Mode)
+		styledAgentName := styles.NewStyle().Foreground(agentColor).Render(agentName)
+		modelAndAgentSuffix = fmt.Sprintf("%s %s", styledAgentName, assistantMsg.ModelID)
+	}
+
+	var info string
+	if modelAndAgentSuffix != "" {
+		info = fmt.Sprintf("%s (%s)", modelAndAgentSuffix, timestamp)
+	} else {
+		info = fmt.Sprintf("%s (%s)", author, timestamp)
+	}
+	info = styles.NewStyle().Foreground(t.TextMuted()).Render(info)
 	if !showToolDetails && toolCalls != nil && len(toolCalls) > 0 {
 		content = content + "\n\n"
 		for _, toolCall := range toolCalls {
@@ -299,10 +394,20 @@ func renderText(
 			WithBorderColor(t.Secondary()),
 		)
 	case opencode.AssistantMessage:
+		if isThinking {
+			return renderContentBlock(
+				app,
+				content,
+				width,
+				WithTextColor(t.Text()),
+				WithBackgroundColor(t.BackgroundPanel()),
+				WithBorderColor(t.BackgroundPanel()),
+			)
+		}
 		return renderContentBlock(
 			app,
 			content,
-			width+2,
+			width,
 			WithNoBorder(),
 			WithBackgroundColor(t.Background()),
 		)
@@ -377,8 +482,8 @@ func renderToolDetails(
 	}
 
 	if permission.Metadata != nil {
-		metadata := toolCall.State.Metadata.(map[string]any)
-		if metadata == nil {
+		metadata, ok := toolCall.State.Metadata.(map[string]any)
+		if metadata == nil || !ok {
 			metadata = map[string]any{}
 		}
 		maps.Copy(metadata, permission.Metadata)
@@ -465,13 +570,9 @@ func renderToolDetails(
 		case "bash":
 			command := toolInputMap["command"].(string)
 			body = fmt.Sprintf("```console\n$ %s\n", command)
-			stdout := metadata["stdout"]
-			if stdout != nil {
-				body += ansi.Strip(fmt.Sprintf("%s", stdout))
-			}
-			stderr := metadata["stderr"]
-			if stderr != nil {
-				body += ansi.Strip(fmt.Sprintf("%s", stderr))
+			output := metadata["output"]
+			if output != nil {
+				body += ansi.Strip(fmt.Sprintf("%s", output))
 			}
 			body += "```"
 			body = util.ToMarkdown(body, width, backgroundColor)
