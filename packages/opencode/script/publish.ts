@@ -5,7 +5,7 @@ import { $ } from "bun"
 
 import pkg from "../package.json"
 
-const dry = process.env["OPENCODE_DRY"] === "true"
+// const dry = process.env["OPENCODE_DRY"] === "true" // Commented out for fork
 const version = process.env["OPENCODE_VERSION"]!
 const snapshot = process.env["OPENCODE_SNAPSHOT"] === "true"
 
@@ -95,11 +95,13 @@ if (!snapshot) {
     await $`cd dist/${key}/bin && zip -r ../../${key}.zip *`
   }
 
-  // Calculate SHA values
+  // Calculate SHA values - needed for AUR/Homebrew publishing (disabled for fork)
+  /*
   const arm64Sha = await $`sha256sum ./dist/opencode-linux-arm64.zip | cut -d' ' -f1`.text().then((x) => x.trim())
   const x64Sha = await $`sha256sum ./dist/opencode-linux-x64.zip | cut -d' ' -f1`.text().then((x) => x.trim())
   const macX64Sha = await $`sha256sum ./dist/opencode-darwin-x64.zip | cut -d' ' -f1`.text().then((x) => x.trim())
   const macArm64Sha = await $`sha256sum ./dist/opencode-darwin-arm64.zip | cut -d' ' -f1`.text().then((x) => x.trim())
+  */
 
   /* AUR package - commented out as AUR is down
   const pkgbuild = [
