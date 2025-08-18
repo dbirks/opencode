@@ -12,8 +12,9 @@ import { Bus } from "../../bus"
 import { Log } from "../../util/log"
 import { FileWatcher } from "../../file/watch"
 import { Ide } from "../../ide"
-import { Agent } from "../../agent/agent"
+
 import { Flag } from "../../flag/flag"
+import { Session } from "../../session"
 
 declare global {
   const OPENCODE_TUI_PATH: string
@@ -39,14 +40,24 @@ export const TuiCommand = cmd({
         alias: ["m"],
         describe: "model to use in the format of provider/model",
       })
+      .option("continue", {
+        alias: ["c"],
+        describe: "continue the last session",
+        type: "boolean",
+      })
+      .option("session", {
+        alias: ["s"],
+        describe: "session id to continue",
+        type: "string",
+      })
       .option("prompt", {
         alias: ["p"],
         type: "string",
         describe: "prompt to use",
       })
-      .option("mode", {
+      .option("agent", {
         type: "string",
-        describe: "mode to use",
+        describe: "agent to use",
       })
       .option("port", {
         type: "number",
@@ -69,6 +80,19 @@ export const TuiCommand = cmd({
         return
       }
       const result = await bootstrap({ cwd }, async (app) => {
+        const sessionID = await (async () => {
+          if (args.continue) {
+            const list = Session.list()
+            const first = await list.next()
+            await list.return()
+            if (first.done) return
+            return first.value.id
+          }
+          if (args.session) {
+            return args.session
+          }
+          return undefined
+        })()
         FileWatcher.init()
         const providers = await Provider.list()
         if (Object.keys(providers).length === 0) {
@@ -105,7 +129,8 @@ export const TuiCommand = cmd({
             ...cmd,
             ...(args.model ? ["--model", args.model] : []),
             ...(args.prompt ? ["--prompt", args.prompt] : []),
-            ...(args.mode ? ["--mode", args.mode] : []),
+            ...(args.agent ? ["--agent", args.agent] : []),
+            ...(sessionID ? ["--session", sessionID] : []),
           ],
           cwd,
           stdout: "inherit",
@@ -116,7 +141,6 @@ export const TuiCommand = cmd({
             CGO_ENABLED: "0",
             OPENCODE_SERVER: server.url.toString(),
             OPENCODE_APP_INFO: JSON.stringify(app),
-            OPENCODE_AGENTS: JSON.stringify(await Agent.list()),
           },
           onExit: () => {
             server.stop()

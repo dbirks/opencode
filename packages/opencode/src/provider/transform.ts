@@ -74,6 +74,7 @@ export namespace ProviderTransform {
 
   export function temperature(_providerID: string, modelID: string) {
     if (modelID.toLowerCase().includes("qwen")) return 0.55
+    if (modelID.toLowerCase().includes("claude")) return 1
     return 0
   }
 
@@ -82,33 +83,19 @@ export namespace ProviderTransform {
     return undefined
   }
 
-  export function options(providerID: string, modelID: string): Record<string, any> | undefined {
-    if (modelID.includes("gpt-5")) {
-      if (providerID === "azure") {
-        return {
-          reasoning_effort: "minimal",
-          text_verbosity: "verbose",
-        }
-      }
-      return {
-        reasoningEffort: "minimal",
-        textVerbosity: "low",
-        // reasoningSummary: "auto",
-        // include: ["reasoning.encrypted_content"],
+  export function options(providerID: string, modelID: string, sessionID: string): Record<string, any> | undefined {
+    const result: Record<string, any> = {}
+
+    if (providerID === "openai") {
+      result["promptCacheKey"] = sessionID
+    }
+
+    if (modelID.includes("gpt-5") && !modelID.includes("gpt-5-chat")) {
+      result["reasoningEffort"] = "minimal"
+      if (providerID !== "azure") {
+        result["textVerbosity"] = "low"
       }
     }
-    // if (modelID.includes("claude")) {
-    //   return {
-    //     thinking: {
-    //       type: "enabled",
-    //       budgetTokens: 32000,
-    //     },
-    //   }
-    // }
-    // if (_providerID === "bedrock") {
-    //   return {
-    //     reasoningConfig: { type: "enabled", budgetTokens: 32000 },
-    //   }
-    // }
+    return result
   }
 }

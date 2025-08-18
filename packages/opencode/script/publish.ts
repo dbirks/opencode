@@ -30,7 +30,7 @@ const targets = [
 await $`rm -rf dist`
 
 const optionalDependencies: Record<string, string> = {}
-// const npmTag = snapshot ? "snapshot" : "latest" // Commented out for fork
+const npmTag = snapshot ? "snapshot" : "latest"
 for (const [os, arch] of targets) {
   console.log(`building ${os}-${arch}`)
   const name = `${pkg.name}-${os}-${arch}`
@@ -60,10 +60,7 @@ for (const [os, arch] of targets) {
       2,
     ),
   )
-  // Set permissions for binary files
-  await $`cd dist/${name} && chmod 777 -R .`
-  // Skip npm publishing for fork - requires NPM_CONFIG_TOKEN
-  // if (!dry) await $`cd dist/${name} && chmod 777 -R . && bun publish --access public --tag ${npmTag}`
+  if (!dry) await $`cd dist/${name} && chmod 777 -R . && bun publish --access public --tag ${npmTag}`
   optionalDependencies[name] = version
 }
 
@@ -87,58 +84,20 @@ await Bun.file(`./dist/${pkg.name}/package.json`).write(
     2,
   ),
 )
-// Skip npm publishing for fork - requires NPM_CONFIG_TOKEN
-// if (!dry) await $`cd ./dist/${pkg.name} && bun publish --access public --tag ${npmTag}`
+if (!dry) await $`cd ./dist/${pkg.name} && bun publish --access public --tag ${npmTag}`
 
 if (!snapshot) {
   for (const key of Object.keys(optionalDependencies)) {
     await $`cd dist/${key}/bin && zip -r ../../${key}.zip *`
   }
 
-  const previous = await fetch("https://api.github.com/repos/sst/opencode/releases/latest")
-    .then((res) => {
-      if (!res.ok) throw new Error(res.statusText)
-      return res.json()
-    })
-    .then((data) => data.tag_name)
-
-  console.log("finding commits between", previous, "and", "HEAD")
-  const commits = await fetch(`https://api.github.com/repos/sst/opencode/compare/${previous}...HEAD`)
-    .then((res) => res.json())
-    .then((data) => data.commits || [])
-
-  const raw = commits.map((commit: any) => `- ${commit.commit.message.split("\n").join(" ")}`)
-  console.log(raw)
-
-  const notes =
-    raw
-      .filter((x: string) => {
-        const lower = x.toLowerCase()
-        return (
-          !lower.includes("release:") &&
-          !lower.includes("ignore:") &&
-          !lower.includes("chore:") &&
-          !lower.includes("ci:") &&
-          !lower.includes("wip:") &&
-          !lower.includes("docs:") &&
-          !lower.includes("doc:")
-        )
-      })
-      .join("\n") || "No notable changes"
-
-  if (!dry) await $`gh release create v${version} --title "v${version}" --notes ${notes} ./dist/*.zip`
-
-  // Calculate SHA values - needed for AUR/Homebrew
-  /*
+  // Calculate SHA values
   const arm64Sha = await $`sha256sum ./dist/opencode-linux-arm64.zip | cut -d' ' -f1`.text().then((x) => x.trim())
   const x64Sha = await $`sha256sum ./dist/opencode-linux-x64.zip | cut -d' ' -f1`.text().then((x) => x.trim())
   const macX64Sha = await $`sha256sum ./dist/opencode-darwin-x64.zip | cut -d' ' -f1`.text().then((x) => x.trim())
   const macArm64Sha = await $`sha256sum ./dist/opencode-darwin-arm64.zip | cut -d' ' -f1`.text().then((x) => x.trim())
-  */
 
-  // Skip AUR publishing for fork - requires SSH keys
-  /*
-  // AUR package
+  /* AUR package - commented out as AUR is down
   const pkgbuild = [
     "# Maintainer: dax",
     "# Maintainer: adam",
@@ -167,7 +126,7 @@ if (!snapshot) {
     "",
   ].join("\n")
 
-  for (const pkg of ["opencode", "opencode-bin"]) {
+  for (const pkg of ["opencode-bin"]) {
     await $`rm -rf ./dist/aur-${pkg}`
     await $`git clone ssh://aur@aur.archlinux.org/${pkg}.git ./dist/aur-${pkg}`
     await $`cd ./dist/aur-${pkg} && git checkout master`
@@ -179,8 +138,6 @@ if (!snapshot) {
   }
   */
 
-  // Skip Homebrew publishing for fork - requires push access to sst/homebrew-tap
-  /*
   // Homebrew formula
   const homebrewFormula = [
     "# typed: false",
@@ -238,5 +195,4 @@ if (!snapshot) {
   await $`cd ./dist/homebrew-tap && git add opencode.rb`
   await $`cd ./dist/homebrew-tap && git commit -m "Update to v${version}"`
   if (!dry) await $`cd ./dist/homebrew-tap && git push`
-  */
 }

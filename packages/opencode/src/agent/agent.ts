@@ -5,6 +5,7 @@ import { Provider } from "../provider/provider"
 import { generateObject, type ModelMessage } from "ai"
 import PROMPT_GENERATE from "./generate.txt"
 import { SystemPrompt } from "../session/system"
+import { mergeDeep } from "remeda"
 
 export namespace Agent {
   export const Info = z
@@ -12,8 +13,14 @@ export namespace Agent {
       name: z.string(),
       description: z.string().optional(),
       mode: z.union([z.literal("subagent"), z.literal("primary"), z.literal("all")]),
+      builtIn: z.boolean(),
       topP: z.number().optional(),
       temperature: z.number().optional(),
+      permission: z.object({
+        edit: Config.Permission,
+        bash: z.record(z.string(), Config.Permission),
+        webfetch: Config.Permission.optional(),
+      }),
       model: z
         .object({
           modelID: z.string(),
@@ -31,6 +38,16 @@ export namespace Agent {
 
   const state = App.state("agent", async () => {
     const cfg = await Config.get()
+    const defaultTools = cfg.tools ?? {}
+    const defaultPermission: Info["permission"] = {
+      edit: "allow",
+      bash: {
+        "*": "allow",
+      },
+      webfetch: "allow",
+    }
+    const agentPermission = mergeAgentPermissions(defaultPermission, cfg.permission ?? {})
+
     const result: Record<string, Info> = {
       general: {
         name: "general",
@@ -39,25 +56,33 @@ export namespace Agent {
         tools: {
           todoread: false,
           todowrite: false,
+          ...defaultTools,
         },
         options: {},
+        permission: agentPermission,
         mode: "subagent",
+        builtIn: true,
       },
       build: {
         name: "build",
-        tools: {},
+        tools: { ...defaultTools },
         options: {},
+        permission: agentPermission,
         mode: "primary",
+        builtIn: true,
       },
       plan: {
         name: "plan",
         options: {},
+        permission: agentPermission,
         tools: {
           write: false,
           edit: false,
           patch: false,
+          ...defaultTools,
         },
         mode: "primary",
+        builtIn: true,
       },
     }
     for (const [key, value] of Object.entries(cfg.agent ?? {})) {
@@ -70,25 +95,35 @@ export namespace Agent {
         item = result[key] = {
           name: key,
           mode: "all",
+          permission: agentPermission,
           options: {},
           tools: {},
+          builtIn: false,
         }
-      const { model, prompt, tools, description, temperature, top_p, mode, ...extra } = value
+      const { model, prompt, tools, description, temperature, top_p, mode, permission, ...extra } = value
       item.options = {
         ...item.options,
         ...extra,
       }
-      if (value.model) item.model = Provider.parseModel(value.model)
-      if (value.prompt) item.prompt = value.prompt
-      if (value.tools)
+      if (model) item.model = Provider.parseModel(model)
+      if (prompt) item.prompt = prompt
+      if (tools)
         item.tools = {
           ...item.tools,
-          ...value.tools,
+          ...tools,
         }
-      if (value.description) item.description = value.description
-      if (value.temperature != undefined) item.temperature = value.temperature
-      if (value.top_p != undefined) item.topP = value.top_p
-      if (value.mode) item.mode = value.mode
+      item.tools = {
+        ...defaultTools,
+        ...item.tools,
+      }
+      if (description) item.description = description
+      if (temperature != undefined) item.temperature = temperature
+      if (top_p != undefined) item.topP = top_p
+      if (mode) item.mode = mode
+
+      if (permission ?? cfg.permission) {
+        item.permission = mergeAgentPermissions(cfg.permission ?? {}, permission ?? {})
+      }
     }
     return result
   })
@@ -130,4 +165,33 @@ export namespace Agent {
     })
     return result.object
   }
+}
+
+function mergeAgentPermissions(basePermission: any, overridePermission: any): Agent.Info["permission"] {
+  const merged = mergeDeep(basePermission ?? {}, overridePermission ?? {}) as any
+  let mergedBash
+  if (merged.bash) {
+    if (typeof merged.bash === "string") {
+      mergedBash = {
+        "*": merged.bash,
+      }
+    }
+    // if granular permissions are provided, default to "ask"
+    if (typeof merged.bash === "object") {
+      mergedBash = mergeDeep(
+        {
+          "*": "ask",
+        },
+        merged.bash,
+      )
+    }
+  }
+
+  const result: Agent.Info["permission"] = {
+    edit: merged.edit ?? "allow",
+    webfetch: merged.webfetch ?? "allow",
+    bash: mergedBash ?? { "*": "allow" },
+  }
+
+  return result
 }

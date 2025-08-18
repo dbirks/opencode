@@ -1,4 +1,5 @@
 import path from "path"
+import { spawn } from "child_process"
 import { Decimal } from "decimal.js"
 import { z, ZodSchema } from "zod"
 import {
@@ -42,6 +43,9 @@ import { ToolRegistry } from "../tool/registry"
 import { Plugin } from "../plugin"
 import { Agent } from "../agent/agent"
 import { Permission } from "../permission"
+import { Wildcard } from "../util/wildcard"
+import { ulid } from "ulid"
+import { defer } from "../util/defer"
 
 export namespace Session {
   const log = Log.create({ service: "session" })
@@ -159,12 +163,12 @@ export namespace Session {
     },
   )
 
-  export async function create(parentID?: string) {
+  export async function create(parentID?: string, title?: string) {
     const result: Info = {
       id: Identifier.descending("session"),
       version: Installation.VERSION,
       parentID,
-      title: createDefaultTitle(!!parentID),
+      title: title ?? createDefaultTitle(!!parentID),
       time: {
         created: Date.now(),
         updated: Date.now(),
@@ -522,7 +526,9 @@ export namespace Session {
                   t.execute(args, {
                     sessionID: input.sessionID,
                     abort: new AbortController().signal,
+                    agent: input.agent!,
                     messageID: userMsg.id,
+                    extra: { bypassCwdCheck: true },
                     metadata: async () => {},
                   }),
                 )
@@ -665,14 +671,14 @@ export namespace Session {
     const lastSummary = msgs.findLast((msg) => msg.info.role === "assistant" && msg.info.summary === true)
     if (lastSummary) msgs = msgs.filter((msg) => msg.info.id >= lastSummary.info.id)
 
-    if (msgs.length === 1 && !session.parentID && isDefaultTitle(session.title)) {
+    if (msgs.filter((m) => m.info.role === "user").length === 1 && !session.parentID && isDefaultTitle(session.title)) {
       const small = (await Provider.getSmallModel(input.providerID)) ?? model
       generateText({
         maxOutputTokens: small.info.reasoning ? 1024 : 20,
         providerOptions: {
           [input.providerID]: {
             ...small.info.options,
-            ...ProviderTransform.options(input.providerID, small.info.id),
+            ...ProviderTransform.options(input.providerID, small.info.id, input.sessionID),
           },
         },
         messages: [
@@ -758,17 +764,22 @@ export namespace Session {
       sessionID: input.sessionID,
     }
     await updateMessage(assistantMsg)
+    await using _ = defer(async () => {
+      if (assistantMsg.time.completed) return
+      await Storage.remove(`session/message/${input.sessionID}/${assistantMsg.id}`)
+      await Bus.publish(MessageV2.Event.Removed, { sessionID: input.sessionID, messageID: assistantMsg.id })
+    })
     const tools: Record<string, AITool> = {}
 
     const processor = createProcessor(assistantMsg, model.info)
 
     const enabledTools = pipe(
       agent.tools,
-      mergeDeep(await ToolRegistry.enabled(input.providerID, input.modelID)),
+      mergeDeep(await ToolRegistry.enabled(input.providerID, input.modelID, agent)),
       mergeDeep(input.tools ?? {}),
     )
     for (const item of await ToolRegistry.tools(input.providerID, input.modelID)) {
-      if (enabledTools[item.id] === false) continue
+      if (Wildcard.all(item.id, enabledTools) === false) continue
       tools[item.id] = tool({
         id: item.id as any,
         description: item.description,
@@ -790,6 +801,7 @@ export namespace Session {
             abort: options.abortSignal!,
             messageID: assistantMsg.id,
             callID: options.toolCallId,
+            agent: agent.name,
             metadata: async (val) => {
               const match = processor.partFromToolCall(options.toolCallId)
               if (match && match.state.status === "running") {
@@ -829,7 +841,7 @@ export namespace Session {
     }
 
     for (const [key, item] of Object.entries(await MCP.tools())) {
-      if (enabledTools[key] === false) continue
+      if (Wildcard.all(key, enabledTools) === false) continue
       const execute = item.execute
       if (!execute) continue
       item.execute = async (args, opts) => {
@@ -865,7 +877,7 @@ export namespace Session {
           : undefined,
         topP: agent.topP ?? ProviderTransform.topP(input.providerID, input.modelID),
         options: {
-          ...ProviderTransform.options(input.providerID, input.modelID),
+          ...ProviderTransform.options(input.providerID, input.modelID, input.sessionID),
           ...model.info.options,
           ...agent.options,
         },
@@ -961,7 +973,7 @@ export namespace Session {
             content: x,
           }),
         ),
-        ...MessageV2.toModelMessage(msgs),
+        ...MessageV2.toModelMessage(msgs.filter((m) => !(m.info.role === "assistant" && m.info.error))),
       ],
       tools: model.info.tool_call === false ? undefined : tools,
       model: wrapLanguageModel({
@@ -993,6 +1005,136 @@ export namespace Session {
     return result
   }
 
+  export const CommandInput = z.object({
+    sessionID: Identifier.schema("session"),
+    agent: z.string(),
+    command: z.string(),
+  })
+  export type CommandInput = z.infer<typeof CommandInput>
+  export async function shell(input: CommandInput) {
+    using abort = lock(input.sessionID)
+    const msg: MessageV2.Assistant = {
+      id: Identifier.ascending("message"),
+      sessionID: input.sessionID,
+      system: [],
+      mode: input.agent,
+      cost: 0,
+      path: {
+        cwd: App.info().path.cwd,
+        root: App.info().path.root,
+      },
+      time: {
+        created: Date.now(),
+      },
+      role: "assistant",
+      tokens: {
+        input: 0,
+        output: 0,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      },
+      modelID: "",
+      providerID: "",
+    }
+    await updateMessage(msg)
+    const part: MessageV2.Part = {
+      type: "tool",
+      id: Identifier.ascending("part"),
+      messageID: msg.id,
+      sessionID: input.sessionID,
+      tool: "bash",
+      callID: ulid(),
+      state: {
+        status: "running",
+        time: {
+          start: Date.now(),
+        },
+        input: {
+          command: input.command,
+        },
+      },
+    }
+    await updatePart(part)
+    const app = App.info()
+    const shell = process.env["SHELL"] ?? "bash"
+    const shellName = path.basename(shell)
+
+    const scripts: Record<string, string> = {
+      nu: input.command,
+      fish: `eval "${input.command}"`,
+    }
+
+    const script =
+      scripts[shellName] ??
+      `[[ -f ~/.zshenv ]] && source ~/.zshenv >/dev/null 2>&1 || true
+       [[ -f "\${ZDOTDIR:-$HOME}/.zshrc" ]] && source "\${ZDOTDIR:-$HOME}/.zshrc" >/dev/null 2>&1 || true
+       [[ -f ~/.bashrc ]] && source ~/.bashrc >/dev/null 2>&1 || true
+       eval "${input.command}"`
+
+    const isFishOrNu = shellName === "fish" || shellName === "nu"
+    const args = isFishOrNu ? ["-c", script] : ["-c", "-l", script]
+
+    const proc = spawn(shell, args, {
+      cwd: app.path.cwd,
+      signal: abort.signal,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        TERM: "dumb",
+      },
+    })
+
+    let output = ""
+
+    proc.stdout?.on("data", (chunk) => {
+      output += chunk.toString()
+      if (part.state.status === "running") {
+        part.state.metadata = {
+          output: output,
+          description: "",
+        }
+        updatePart(part)
+      }
+    })
+
+    proc.stderr?.on("data", (chunk) => {
+      output += chunk.toString()
+      if (part.state.status === "running") {
+        part.state.metadata = {
+          output: output,
+          description: "",
+        }
+        updatePart(part)
+      }
+    })
+
+    await new Promise<void>((resolve) => {
+      proc.on("close", () => {
+        resolve()
+      })
+    })
+    msg.time.completed = Date.now()
+    await updateMessage(msg)
+    if (part.state.status === "running") {
+      part.state = {
+        status: "completed",
+        time: {
+          ...part.state.time,
+          end: Date.now(),
+        },
+        input: part.state.input,
+        title: "",
+        metadata: {
+          output,
+          description: "",
+        },
+        output,
+      }
+      await updatePart(part)
+    }
+    return { info: msg, parts: [part] }
+  }
+
   function createProcessor(assistantMsg: MessageV2.Assistant, model: ModelsDev.Model) {
     const toolcalls: Record<string, MessageV2.ToolPart> = {}
     let snapshot: string | undefined
@@ -1007,7 +1149,7 @@ export namespace Session {
       async process(stream: StreamTextResult<Record<string, AITool>, never>) {
         try {
           let currentText: MessageV2.TextPart | undefined
-          // let reasoningMap: Record<string, MessageV2.ReasoningPart> = {}
+          let reasoningMap: Record<string, MessageV2.ReasoningPart> = {}
 
           for await (const value of stream.fullStream) {
             log.info("part", {
@@ -1017,7 +1159,6 @@ export namespace Session {
               case "start":
                 break
 
-              /*
               case "reasoning-start":
                 if (value.id in reasoningMap) {
                   continue
@@ -1055,7 +1196,6 @@ export namespace Session {
                   delete reasoningMap[value.id]
                 }
                 break
-                */
 
               case "tool-input-start":
                 const part = await updatePart({
@@ -1130,6 +1270,7 @@ export namespace Session {
                       status: "error",
                       input: value.input,
                       error: (value.error as any).toString(),
+                      metadata: value.error instanceof Permission.RejectedError ? value.error.metadata : undefined,
                       time: {
                         start: match.state.time.start,
                         end: Date.now(),
