@@ -11,6 +11,7 @@ import { Log } from "../util/log"
 import { Wildcard } from "../util/wildcard"
 import { $ } from "bun"
 import { Agent } from "../agent/agent"
+import { Config } from "../config/config"
 
 const MAX_OUTPUT_LENGTH = 30_000
 const DEFAULT_TIMEOUT = 1 * 60 * 1000
